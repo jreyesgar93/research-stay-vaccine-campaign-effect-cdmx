@@ -1,0 +1,8 @@
+pymc3
+matplolib
+numpy
+pandas
+scipy
+arviz
+statsmodels
+scikit-learn
