@@ -4,7 +4,7 @@
 - `mes` directory contains the code created for the research project with MES
 - `report` directory contains the code created for the research stay report. 
 
-####  Clone the repository, update pip and generate a pyenv and renv. 
+##  Clone the repository, update pip and generate a pyenv and renv. 
 
 - Clone the following repository:
 
