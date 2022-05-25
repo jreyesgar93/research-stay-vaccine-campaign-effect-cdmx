@@ -1,0 +1,649 @@
+ ---
+title: "Plots"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(SemiPar)
+library(ggthemes)
+library(tidyr)
+library(zoo)
+library(CausalImpact)
+library(readr)
+library(stringr)
+library(reshape2)
+library(ISOweek)
+library(ggpubr)
+
+source("functions.R")
+```
+
+
+
+
+
+```{r}
+
+
+fit_model <- function(covid_casos,sd.level = 0.01){ 
+  fecha_inicio_datos <- covid_casos %>% pull(FECHA_SINTOMAS) %>% min()
+  fecha_inicio_60    <- as.Date("2021-02-15")
+  fecha_inicio_otros <- as.Date("2021-05-03")
+  fecha_fin_datos    <- covid_casos %>% pull(FECHA_SINTOMAS) %>% max()
+  
+  CausalImpact(data = zoo(covid_casos[,c(3,4,5)],
+                          covid_casos$FECHA_SINTOMAS),
+               pre.period  = c(fecha_inicio_datos, fecha_inicio_60),
+               post.period = c(fecha_inicio_60 + 1, fecha_inicio_otros),
+               model.args  = list(niter = 1000,
+                                  prior.level.sd = sd.level,
+                                  dynamic.regression=FALSE
+               ))
+}
+
+
+covid_casos<-get_data_cases()
+covid_hosp<-get_data_hosp()
+covid_deaths<-get_data_muertes()
+
+set.seed(40)
+model_casos<-fit_model(covid_casos)
+model_hosp<-fit_model(covid_hosp)
+model_deaths<-fit_model(covid_deaths)
+
+
+
+cumulative_june_1<-cum_data_as_of_date()
+cum_cases<-cumulative_june_1[1]
+cum_hosp<-cumulative_june_1[2]
+cum_deaths<-cumulative_june_1[3]
+  
+
+load("resampled_datasets.RData")
+
+data_models <- data_models_nr
+
+```
+
+### Daily Cases
+
+
+```{r}
+
+
+boot_predictions<-matrix(nrow=nrow(data_models),ncol=106)
+for(i in c(1:nrow(data_models))){
+  boot_predictions[i,1:106]<-data_models$cases_prediction[[i]]$point.pred
+}
+
+boot_quantiles<-as.data.frame(boot_predictions)%>%summarise_all(quantile,c(0.025,.975))
+```
+
+
+
+
+```{r}
+dates<-as.Date(covid_casos$FECHA_SINTOMAS)
+p975<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles[2,]))),
+            boot_quantiles[2,]))
+p025<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles[1,]))),
+            boot_quantiles[1,]))
+response<-as.numeric(model_casos$series$response)
+point.pred<-as.numeric(model_casos$series$point.pred)
+
+data<-tibble(dates,p975,p025,response,point.pred)
+
+cols <- c("Observed data for people aged 60 and older"="black","Model estimates assuming no vaccination campaign"="red")
+plt1_cases<-ggplot(data=data)+
+   geom_ribbon(alpha=0.3,
+              fill="red",
+              aes(x=dates,
+                  ymax=p025,
+                  ymin=p975
+                  ),na.rm=TRUE)+
+  geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-02-15")]))+
+   geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-05-03")]))+
+     annotate(geom = "text",
+             label = c("February 15,\n2021", "May 3, 2021"),
+             x = c(dates[which(dates=="2021-02-17")],dates[which(dates=="2021-05-05")]),
+             y=c(600,600),
+             angle = 90, 
+             vjust = 1,
+             size=c(2,2))+
+   annotate(geom = "text",
+             label = c("Vaccination \ncampaign period for \n people aged 60+"),
+             x = c(dates[which(dates=="2021-03-27")]),
+             y=c(820),
+             vjust = 1,
+             size=c(2))+
+  geom_line(linetype="dashed",
+            aes(x=dates,
+                y=point.pred,
+                color="Model estimates assuming no vaccination campaign"),na.rm=TRUE)+
+  geom_line(aes(x=dates,
+                y=response,
+                color = "Observed data for people aged 60 and older"))+
+  #ggtitle("COVID-19 in people aged Observed data for people aged 60 and older in Mexico City")+
+  labs(x="",y="Cases")+
+  scale_colour_manual(name="",values=cols)+
+  theme_classic()+
+  theme(legend.position = "top")
+
+
+#ggsave("plots/normal_regression_cases.png",plot = plt1_cases,width = 10*.75, height = 6*.75,dpi=200)
+
+```
+
+### Cumulative Cases
+
+
+
+
+```{r}
+boot_predictions_cum<-matrix(nrow=nrow(data_models),ncol=106)
+for(i in c(1:nrow(data_models))){
+  boot_predictions_cum[i,1:106]<-data_models$cases_prediction[[i]]$cum.pred
+}
+
+boot_quantiles_cum<-as.data.frame(boot_predictions_cum)%>%summarise_all(quantile,c(0.025,.975))
+```
+
+
+
+
+```{r}
+dates<-as.Date(covid_casos$FECHA_SINTOMAS)
+p975_cum<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles_cum[2,]))),
+            boot_quantiles_cum[2,]))
+p025_cum<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles_cum[1,]))),
+            boot_quantiles_cum[1,]))
+response_cum<-as.numeric(model_casos$series$cum.response)
+cum.pred<-as.numeric(model_casos$series$cum.pred)
+
+data_cum<-tibble(dates,p975_cum,p025_cum,response_cum,cum.pred)
+
+adj<-cum_cases ###modificar
+
+cols <- c("Observed data for people aged 60 and older"="black","Model estimates assuming no vaccination campaign"="red")
+plt2_cases<-ggplot(data=data_cum[209:nrow(data_cum),])+
+   geom_ribbon(alpha=0.3,
+              fill="red",
+              aes(x=dates,
+                  ymax=p025_cum+adj,
+                  ymin=p975_cum+adj
+                  ),na.rm=TRUE)+
+  geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-02-15")]))+
+   geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-05-03")]))+
+     annotate(geom = "text",
+             label = c("February 15,\n2021", "May 3, 2021"),
+             x = c(dates[which(dates=="2021-02-17")],dates[which(dates=="2021-05-05")]),
+             y=c(64000,64000),
+             angle = 90, 
+             vjust = 1,
+             size=c(2,2))+
+   annotate(geom = "text",
+             label = c("Vaccination \ncampaign period for \n people aged 60+"),
+             x = c(dates[which(dates=="2021-03-27")]),
+             y=c(65000),
+             vjust = 1,
+             size=c(2))+
+  geom_line(linetype="dashed",
+            aes(x=dates,
+                y=cum.pred+adj,
+                color="Model estimates assuming no vaccination campaign"),na.rm=TRUE)+
+  geom_line(aes(x=dates,
+                y=response_cum+adj,
+                color = "Observed data for people aged 60 and older"))+
+  #ggtitle("COVID-19 in people aged Observed data for people aged 60 and older in Mexico City")+
+  labs(x="",y="Cumulative Cases")+
+  scale_colour_manual(name="",values=cols)+
+  theme_classic()+
+  theme(legend.position = "top")+
+  scale_y_continuous(labels = scales::comma)
+#ggsave("plots/normal_regression_cum_cases.png",plot = plt2_cases,width = 10*.75, height = 6*.75,dpi=200)
+```
+
+
+### Hospitalizations
+
+
+```{r}
+boot_predictions_hosp<-matrix(nrow=nrow(data_models),ncol=106)
+for(i in c(1:nrow(data_models))){
+  boot_predictions_hosp[i,1:106]<-data_models$hosp_prediction[[i]]$point.pred
+}
+
+boot_quantiles_hosp<-as.data.frame(boot_predictions_hosp)%>%summarise_all(quantile,c(0.025,.975))
+```
+
+
+```{r}
+dates<-as.Date(covid_hosp$FECHA_SINTOMAS)
+p975_hosp<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles_hosp[2,]))),
+            boot_quantiles_hosp[2,]))
+p025_hosp<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles_hosp[1,]))),
+            boot_quantiles_hosp[1,]))
+response_hosp<-as.numeric(model_hosp$series$response)
+point.pred_hosp<-as.numeric(model_hosp$series$point.pred)
+
+data_hosp<-tibble(dates,p975_hosp,p025_hosp,response_hosp,point.pred_hosp)
+
+cols <- c("Observed data for people aged 60 and older"="black","Model estimates assuming no vaccination campaign"="red")
+plt1_hosp<-ggplot(data=data_hosp)+
+   geom_ribbon(alpha=0.3,
+              fill="red",
+              aes(x=dates,
+                  ymax=p025_hosp,
+                  ymin=p975_hosp
+                  ),na.rm=TRUE)+
+  geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-02-15")]))+
+   geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-05-03")]))+
+     annotate(geom = "text",
+             label = c("February 15,\n2021", "May 3, 2021"),
+             x = c(dates[which(dates=="2021-02-17")],dates[which(dates=="2021-05-05")]),
+             y=c(150,150),
+             angle = 90, 
+             vjust = 1,
+             size=c(2,2))+
+  annotate(geom = "text",
+             label = c("Vaccination \ncampaign period for \n people aged 60+"),
+             x = c(dates[which(dates=="2021-03-27")]),
+             y=c(195),
+             vjust = 1,
+             size=c(2))+
+  geom_line(linetype="dashed",
+            aes(x=dates,
+                y=point.pred_hosp,
+                color="Model estimates assuming no vaccination campaign"),na.rm=TRUE)+
+  geom_line(aes(x=dates,
+                y=response_hosp,
+                color = "Observed data for people aged 60 and older"))+
+  #ggtitle("Covid-19 hospitalizations of people age Observed data for people aged 60 and older in Mexico City")+
+  labs(x="",y="Hospitalizations")+
+  scale_colour_manual(name="",values=cols)+
+  theme_classic()+
+  theme(legend.position = "none")
+
+
+#ggsave("plots/normal_regression_hosp.png",plot = plt1_hosp,width = 10*.75, height = 6*.75,dpi=200)
+
+```
+
+### Cumulative Hospitalizations
+
+
+
+```{r}
+boot_predictions_cum_hosp<-matrix(nrow=nrow(data_models),ncol=106)
+for(i in c(1:nrow(data_models))){
+  boot_predictions_cum_hosp[i,1:106]<-data_models$hosp_prediction[[i]]$cum.pred
+}
+
+boot_quantiles_cum_hosp<-as.data.frame(boot_predictions_cum_hosp)%>%summarise_all(quantile,c(0.025,.975))
+```
+
+
+
+
+```{r}
+dates<-as.Date(covid_hosp$FECHA_SINTOMAS)
+p975_cum_hosp<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles_cum_hosp[2,]))),
+            boot_quantiles_cum_hosp[2,]))
+p025_cum_hosp<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles_cum_hosp[1,]))),
+            boot_quantiles_cum_hosp[1,]))
+response_cum_hosp<-as.numeric(model_hosp$series$cum.response)
+cum.pred_hosp<-as.numeric(model_hosp$series$cum.pred)
+
+data_cum_hosp<-tibble(dates,p975_cum_hosp,p025_cum_hosp,response_cum_hosp,cum.pred_hosp)
+
+adj<-cum_hosp###modificar
+
+cols <- c("Observed data for people aged 60 and older"="black","Model estimates assuming no vaccination campaign"="red")
+plt2_hosp<-ggplot(data=data_cum_hosp[209:nrow(data_cum_hosp),])+
+   geom_ribbon(alpha=0.3,
+              fill="red",
+              aes(x=dates,
+                  ymin=p025_cum_hosp+adj,
+                  ymax=p975_cum_hosp+adj
+                  ),na.rm=TRUE)+
+  geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-02-15")]))+
+   geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-05-03")]))+
+     annotate(geom = "text",
+             label = c("February 15,\n2021", "May 3, 2021"),
+             x = c(dates[which(dates=="2021-02-17")],dates[which(dates=="2021-05-05")]),
+             y=c(21000,21000),
+             angle = 90, 
+             vjust = 1,
+             size=c(2,2))+
+  annotate(geom = "text",
+             label = c("Vaccination \ncampaign period for \n people aged 60+"),
+             x = c(dates[which(dates=="2021-03-27")]),
+             y=c(22000),
+             vjust = 1,
+             size=c(2))+
+  geom_line(linetype="dashed",
+            aes(x=dates,
+                y=cum.pred_hosp+adj,
+                color="Model estimates assuming no vaccination campaign"),na.rm=TRUE)+
+  geom_line(aes(x=dates,
+                y=response_cum_hosp+adj,
+                color = "Observed data for people aged 60 and older"))+
+  #ggtitle("Covid-19 hospitalizations of people age Observed data for people aged 60 and older in Mexico City")+
+  labs(x="",y="Cumulative Hospitalzations")+
+  scale_colour_manual(name="",values=cols)+
+  theme_classic()+
+  theme(legend.position = "None")+
+  scale_y_continuous(labels = scales::comma)
+#ggsave("plots/normal_cum_hosp.png",plot = plt2_hosp,width = 10*.75, height = 6*.75,dpi=200)
+
+```
+
+
+### Muertes
+
+
+
+
+```{r}
+boot_predictions_deaths<-matrix(nrow=nrow(data_models),ncol=106)
+for(i in c(1:nrow(data_models))){
+  
+   boot_predictions_deaths[i,1:106]<-rep(NA,106)
+  boot_predictions_deaths[i,c((107-length(data_models$deaths_prediction[[i]]$point.pred)):106)]<-data_models$deaths_prediction[[i]]$point.pred
+}
+
+boot_quantiles_deaths<-as.data.frame(boot_predictions_deaths)%>%summarise_all(quantile,c(0.025,.975),na.rm=TRUE)
+```
+
+
+```{r}
+dates<-as.Date(covid_deaths$FECHA_SINTOMAS)
+p975_deaths<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles_deaths[2,]))),
+            boot_quantiles_deaths[2,]))
+p025_deaths<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles_deaths[1,]))),
+            boot_quantiles_deaths[1,]))
+response_deaths<-as.numeric(model_deaths$series$response)
+point.pred_deaths<-as.numeric(model_deaths$series$point.pred)
+
+data_deaths<-tibble(dates,p975_deaths,p025_deaths,response_deaths,point.pred_deaths)
+
+cols <- c("Observed data for people aged 60 and older"="black","Model estimates assuming no vaccination campaign"="red")
+plt1_deaths<-ggplot(data=data_deaths)+
+   geom_ribbon(alpha=0.3,
+              fill="red",
+              aes(x=dates,
+                  ymax=p025_deaths,
+                  ymin=p975_deaths
+                  ),na.rm=TRUE)+
+  geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-02-15")]))+
+   geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-05-03")]))+
+     annotate(geom = "text",
+             label = c("February 15,\n2021", "May 3, 2021"),
+             x = c(dates[which(dates=="2021-02-17")],dates[which(dates=="2021-05-05")]),
+             y=c(110,110),
+             angle = 90, 
+             vjust = 1,
+             size=c(2,2))+
+  annotate(geom = "text",
+             label = c("Vaccination \ncampaign period for \n people aged 60+"),
+             x = c(dates[which(dates=="2021-03-27")]),
+             y=c(145),
+             vjust = 1,
+             size=c(2))+
+  geom_line(linetype="dashed",
+            aes(x=dates,
+                y=point.pred_deaths,
+                color="Model estimates assuming no vaccination campaign"),na.rm=TRUE)+
+  geom_line(aes(x=dates,
+                y=response_deaths,
+                color = "Observed data for people aged 60 and older"))+
+  #ggtitle("Covid-19 deaths of people age Observed data for people aged 60 and older in Mexico City")+
+  labs(x="",y="Deaths")+
+  scale_colour_manual(name="",values=cols)+
+  theme_classic()+
+  theme(legend.position = "none")
+
+
+#ggsave("plots/normal_regression_deaths.png",plot = plt1_deaths,width = 10*.75, height = 6*.75,dpi=200)
+
+```
+
+### Cumulative Cases
+
+
+
+```{r}
+boot_predictions_cum_deaths<-matrix(nrow=nrow(data_models),ncol=106)
+for(i in c(1:nrow(data_models))){
+  boot_predictions_cum_deaths[i,1:106]<-rep(NA,106)
+  boot_predictions_cum_deaths[i,c((107-length(data_models$deaths_prediction[[i]]$point.pred)):106)]<-data_models$deaths_prediction[[i]]$cum.pred
+}
+
+boot_quantiles_cum_deaths<-as.data.frame(boot_predictions_cum_deaths)%>%summarise_all(quantile,c(0.025,.975),na.rm=TRUE)
+```
+
+
+
+
+```{r}
+dates<-as.Date(covid_deaths$FECHA_SINTOMAS)
+p975_cum_deaths<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles_cum_deaths[2,]))),
+            boot_quantiles_cum_deaths[2,]))
+p025_cum_deaths<-as.numeric(c(rep(NA,
+            (length(dates)-length(boot_quantiles_cum_deaths[1,]))),
+            boot_quantiles_cum_deaths[1,]))
+response_cum_deaths<-as.numeric(model_deaths$series$cum.response)
+cum.pred_deaths<-as.numeric(model_deaths$series$cum.pred)
+
+data_cum_deaths<-tibble(dates,p975_cum_deaths,p025_cum_deaths,response_cum_deaths,cum.pred_deaths)
+
+adj<-cum_deaths###modificar
+
+cols <- c("Observed data for people aged 60 and older"="black","Model estimates assuming no vaccination campaign"="red")
+plt2_deaths<-ggplot(data=data_cum_deaths[209:nrow(data_cum_deaths),])+
+   geom_ribbon(alpha=0.3,
+              fill="red",
+              aes(x=as.Date(dates),
+                  ymin=p025_cum_deaths+adj,
+                  ymax=p975_cum_deaths+adj
+                  ),na.rm=TRUE)+
+  geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-02-15")]))+
+   geom_vline(color = "grey",
+             linetype = "dashed",
+             aes(xintercept=dates[which(dates=="2021-05-03")]))+
+     annotate(geom = "text",
+             label = c("February 15,\n2021", "May 3, 2021"),
+             x = c(dates[which(dates=="2021-02-17")],dates[which(dates=="2021-05-05")]),
+             y=c(14000,14000),
+             angle = 90, 
+             vjust = 1,
+             size=c(2,2))+
+  annotate(geom = "text",
+             label = c("Vaccination \ncampaign period for \n people aged 60+"),
+             x = c(dates[which(dates=="2021-03-27")]),
+             y=c(15000),
+             vjust = 1,
+             size=c(2))+
+  geom_line(linetype="dashed",
+            aes(x=dates,
+                y=cum.pred_deaths+adj,
+                color="Model estimates assuming no vaccination campaign"),na.rm=TRUE)+
+  geom_line(aes(x=dates,
+                y=response_cum_deaths+adj,
+                color = "Observed data for people aged 60 and older"))+
+  #ggtitle("COVID-19 deaths of people age Observed data for people aged 60 and older in Mexico City")+
+  labs(x="",y="Cumulative Deaths")+
+  scale_colour_manual(name="",values=cols)+
+  theme_classic()+
+  theme(legend.position = "none")+
+  scale_y_continuous(labels = scales::comma)
+#ggsave("plots/norma_regression_cum_deaths.png",plot = plt2_deaths,width = 10*.75, height = 6*.75,dpi=200)
+
+```
+
+
+```{r}
+plot1 <- ggarrange(plt1_cases,plt1_hosp,plt1_deaths,ncol=1,nrow=3,common.legend = TRUE,legend = c("bottom"))
+plot2<- ggarrange(plt2_cases,plt2_hosp,plt2_deaths,ncol=1,nrow=3,common.legend = TRUE,legend = c("bottom"))
+
+
+
+
+
+plot1_1<-annotate_figure(plot1,
+                         top = text_grob("COVID-19 in people aged 60 and older in Mexico City",
+                                         color = "Black", 
+                                         face = "bold",
+                                         size = 12),
+                                 bottom = text_grob("",
+                                         color = "Black", 
+                                         face = "bold",
+                                         size = 12),
+                         fig.lab=" \n \nData Source: TBD  ",
+                         fig.lab.pos = 'bottom.right',
+                         fig.lab.size = 6,
+                         fig.lab.face='italic'
+                         )
+      
+
+
+plot2_1<-annotate_figure(plot2,
+                         top = text_grob("COVID-19 in people aged 60 and older in Mexico City",
+                                         color = "Black", 
+                                         face = "bold",
+                                         size = 12),
+                         bottom = text_grob("",
+                                         color = "Black", 
+                                         face = "bold",
+                                         size = 12),
+                         fig.lab="\n\nData Source: TBD  ",
+                         fig.lab.pos = 'bottom.right',
+                         fig.lab.size = 6,
+                         fig.lab.face='italic'
+                         )
+      
+                                         
+  
+                
+                
+ggsave("plots/final_normal_reg_2.jpeg",plot = plot1_1,width = 800*4, height = 1000*4,units = "px", dpi=500)
+ggsave("plots/final_cumulative_normal_reg_2.jpeg",plot = plot2_1,width = 800*4, height = 1200*4,units = "px", dpi=500)
+```
+
+```{r}
+print("cases")
+model_casos$summary$p[1]
+print("Hospitalzations")
+model_hosp$summary$p[1]
+print("Deaths")
+model_deaths$summary$p[1]
+```
+
+```{r}
+print("cases")
+data_models$cases_pvalue%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+print("Hospitalzations")
+data_models$hosp_pvalue%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+print("Deaths")
+data_models$deaths_pvalue%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+```
+
+```{r}
+print("cases")
+model_casos$summary$AbsEffect
+print("Hospitalzations")
+model_hosp$summary$AbsEffect
+print("Deaths")
+model_deaths$summary$AbsEffect
+```
+
+
+```{r}
+print("cases")
+data_models$cases_abs_effecte%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+print("Hospitalzations")
+data_models$hosp_abs_effecte%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+print("Deaths")
+data_models$deaths_abs_effecte%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+```
+
+
+```{r}
+print("cases")
+data_models$cases_abs_effecte_cum%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+print("Hospitalzations")
+data_models$hosp_abs_effecte_cum%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+print("Deaths")
+data_models$deaths_abs_effecte_cum%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+
+```
+
+
+```{r}
+data_models_nr2 <- data_models_nr%>%
+   mutate(cases_rel_effecte=map(cases_model, get_rel_effect))%>%
+   mutate(cases_rel_effecte_cum=map(cases_model, get_rel_effect_cum))%>%
+    mutate(hosp_rel_effecte=map(hosp_model, get_rel_effect))%>%
+    mutate(hosp_rel_effecte_cum=map(hosp_model, get_rel_effect_cum))%>%
+   mutate(deaths_rel_effecte=map(deaths_model, get_rel_effect))%>%
+   mutate(deaths_rel_effecte_cum=map(deaths_model, get_rel_effect_cum))
+
+
+
+print("cases")
+data_models_nr2$cases_rel_effecte%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+print("Hospitalzations")
+data_models_nr2$hosp_rel_effecte%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+print("Deaths")
+data_models_nr2$deaths_rel_effecte%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+
+
+
+print("cases")
+data_models_nr2$cases_rel_effecte_cum%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+print("Hospitalzations")
+data_models_nr2$hosp_rel_effecte_cum%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+print("Deaths")
+data_models_nr2$deaths_rel_effecte_cum%>%unlist%>%quantile(c(.025,.05,.5,.95,.972))
+
+```
+
+```
